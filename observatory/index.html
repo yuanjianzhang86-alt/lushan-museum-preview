@@ -830,6 +830,7 @@ html.alternate-edition{--paper:#f4f4ec;--ink:#23433f;--muted:#6b7c73;--red:#a845
 .inscription-cue[data-cue="rim"]{right:8%;bottom:max(10%,env(safe-area-inset-bottom));text-align:right}
 .inscription-cue[data-cue="glaze"]{left:8%;top:max(9.5%,env(safe-area-inset-top))}
 .inscription-dust{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+body:has(> .artifact-inscription:not([hidden])) #digital .artifact-scroll-line{visibility:hidden}
 :lang(en) .inscription-cue h2{font-size:clamp(26px,6.5vw,51px);line-height:1.12;letter-spacing:-.025em}
 :lang(en) .inscription-cue p{letter-spacing:0;max-width:32ch;line-height:1.52}
 @media(min-width:540px) and (min-aspect-ratio:6/5){
