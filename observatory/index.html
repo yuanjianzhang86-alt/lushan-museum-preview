@@ -802,6 +802,185 @@ html.alternate-edition{--paper:#f4f4ec;--ink:#23433f;--muted:#6b7c73;--red:#a845
 .object-lens:focus-visible{outline:2px solid var(--red);outline-offset:4px}
 @media (prefers-reduced-motion:reduce){.scene{transition:none}}
 </style>
+<style>
+.artifact-inscription{
+  position:fixed;inset:0 0 auto;height:100vh;height:100svh;
+  z-index:25;pointer-events:none;overflow:hidden;isolation:isolate;
+  --caption-ink:#2c312a;--caption-body:#50534b;
+  color:var(--caption-ink);
+}
+.artifact-inscription[hidden]{display:none}
+.alternate-edition .artifact-inscription{--caption-ink:#28423b;--caption-body:#46594e}
+.inscription-cue{
+  position:absolute;width:max-content;max-width:80%;margin:0;
+  pointer-events:none;user-select:none;
+}
+.inscription-cue h2{
+  font-family:var(--serif,"Songti SC","STSong",serif);
+  font-weight:500;font-size:clamp(34px,7.7vw,56px);
+  line-height:1.18;letter-spacing:.055em;color:var(--caption-ink);
+  margin:0;opacity:0;
+}
+.inscription-cue p{
+  margin:clamp(9px,1.5vh,18px) 0 0;
+  font:400 clamp(13px,2.7vw,17px)/1.7 var(--serif,"Songti SC","STSong",serif);
+  letter-spacing:.045em;color:var(--caption-body);opacity:0;text-wrap:pretty;
+}
+.inscription-cue[data-cue="cloud"]{left:8%;top:max(9.5%,env(safe-area-inset-top))}
+.inscription-cue[data-cue="rim"]{right:8%;bottom:max(10%,env(safe-area-inset-bottom));text-align:right}
+.inscription-cue[data-cue="glaze"]{left:8%;top:max(9.5%,env(safe-area-inset-top))}
+.inscription-dust{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+:lang(en) .inscription-cue h2{font-size:clamp(26px,6.5vw,51px);line-height:1.12;letter-spacing:-.025em}
+:lang(en) .inscription-cue p{letter-spacing:0;max-width:32ch;line-height:1.52}
+@media(min-width:540px) and (min-aspect-ratio:6/5){
+  .inscription-cue{max-width:29vw}
+  .inscription-cue[data-cue="cloud"]{left:8.1%;top:51%}
+  .inscription-cue[data-cue="rim"]{left:8.1%;right:auto;top:30%;bottom:auto;text-align:left}
+  .inscription-cue[data-cue="glaze"]{left:auto;right:5.5%;top:26%;width:25vw}
+  .inscription-cue h2{font-size:clamp(29px,4.15vw,76px)}
+  .inscription-cue p{font-size:clamp(13px,1.23vw,21px);max-width:19em}
+  :lang(en) .inscription-cue h2{font-size:clamp(25px,3.5vw,65px)}
+  :lang(en) .inscription-cue p{max-width:26ch}
+}
+@media(max-height:480px) and (min-aspect-ratio:6/5){
+  .inscription-cue p{margin-top:7px;line-height:1.45}
+}
+
+</style>
+<script>
+// Coordinates are normalized device coordinates. Match the camera's empty
+// space to the text column, then return to the normal full-vessel view.
+function inscriptionFraming(p, width, height) {
+  const ramp = (a,b) => {
+    const t=Math.max(0,Math.min(1,(p-a)/(b-a)));
+    return t*t*(3-2*t);
+  };
+  const amount=1-ramp(.915,1), glaze=ramp(.707,.816);
+  const wide=width>=540 && width/height>=1.2;
+  if (wide) {
+    const compact=Math.min(1,Math.max(0,(1.6-width/height)/.4));
+    const scale=.82-.08*glaze-(.07+.03*glaze)*compact;
+    return {x:(.31-.64*glaze)*amount, y:-.025*amount, scale:1-(1-scale)*amount};
+  }
+  const rim=ramp(.375,.59)*(1-glaze);
+  const square=Math.min(1,Math.max(0,(width/height-.55)/.50));
+  return {x:0,y:(-.14+.32*rim)*amount,scale:1-(.035+.24*square+.055*glaze)*amount};
+}
+
+;(function(global){
+'use strict';
+const clamp=(n,a=0,b=1)=>Math.max(a,Math.min(b,n));
+const smooth=(a,b,v)=>{const t=clamp((v-a)/(b-a));return t*t*(3-2*t);};
+const ease=v=>{const t=clamp(v);return 1-(1-t)*(1-t)*(1-t);};
+const seedOf=text=>{let n=2166136261;for(let i=0;i<text.length;i++)n=Math.imul(n^text.charCodeAt(i),16777619);return n>>>0;};
+function randomSource(n){return()=>{n=(Math.imul(n,1664525)+1013904223)>>>0;return n/4294967296;};}
+function mountInscriptionDust(canvas){
+ if(!canvas||typeof canvas.getContext!=='function')throw new TypeError('Expected a canvas');
+ const ctx=canvas.getContext('2d',{alpha:true,desynchronized:true});
+ let dirty=true,dead=false,width=1,height=1,dpr=1,bounds={left:0,top:0},hasInk=false,lastKey='',draws=0,measures=0,lastMs=0;
+ const cache=new Map();
+ function clear(){if(ctx&&hasInk){ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);hasInk=false;}lastKey='';return api;}
+ function invalidate(){dirty=true;lastKey='';cache.clear();return api;}
+ function viewport(){
+  bounds=canvas.getBoundingClientRect();width=Math.max(1,bounds.width||canvas.clientWidth||1);height=Math.max(1,bounds.height||canvas.clientHeight||1);
+  dpr=Math.min(global.devicePixelRatio||1,1.5);
+  const w=Math.ceil(width*dpr),h=Math.ceil(height*dpr);if(canvas.width!==w)canvas.width=w;if(canvas.height!==h)canvas.height=h;
+  ctx.setTransform(dpr,0,0,dpr,0,0);hasInk=false;dirty=false;measures++;
+ }
+ function sample(cue){
+  const element=cue.element;if(!element||!element.isConnected)return null;
+  const rect=element.getBoundingClientRect(),style=getComputedStyle(element),padding=3;
+  const left=rect.left-bounds.left-padding,top=rect.top-bounds.top-padding;
+  const sw=Math.ceil(rect.width+padding*2),sh=Math.ceil(rect.height+padding*2);
+  if(sw<2||sh<2||sw>4096||sh>2048)return null;
+  const mask=document.createElement('canvas');mask.width=sw;mask.height=sh;
+  const m=mask.getContext('2d',{willReadFrequently:true});if(!m)return null;
+  m.fillStyle='#000';m.textBaseline='alphabetic';m.textAlign='left';
+  const walker=document.createTreeWalker(element,NodeFilter.SHOW_TEXT),range=document.createRange();let node,total=0;
+  while((node=walker.nextNode())&&total<400){
+   const parent=node.parentElement,s=parent?getComputedStyle(parent):style;
+   if(s.display==='none'||s.visibility==='hidden')continue;
+   const size=parseFloat(s.fontSize)||24;
+   m.font=s.font||`${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`;
+   if('fontKerning' in m)m.fontKerning='normal';
+   if('fontStretch' in m)m.fontStretch=s.fontStretch||'normal';
+   const text=node.nodeValue||'';
+   let offset=0;
+   const segments=global.Intl?.Segmenter?Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(text),part=>({text:part.segment,index:part.index})):Array.from(text).map(text=>{const index=offset;offset+=text.length;return {text,index};});
+   for(const segment of segments){
+    if(total++>=400)break;if(!segment.text.trim())continue;
+    range.setStart(node,segment.index);range.setEnd(node,segment.index+segment.text.length);
+    const r=range.getBoundingClientRect();if(r.width<.1||r.height<.1)continue;
+    const metric=m.measureText(segment.text),descent=Number.isFinite(metric.fontBoundingBoxDescent)?metric.fontBoundingBoxDescent:size*.22;
+    m.fillText(segment.text,r.left-rect.left+padding,r.bottom-rect.top+padding-descent);
+   }
+  }
+  range.detach?.();measures++;
+  const pixels=m.getImageData(0,0,sw,sh).data,locations=[];
+  // A subpixel-independent mask makes text formation deterministic across reversals.
+  for(let y=1;y<sh;y+=1.4)for(let x=1;x<sw;x+=1.4){const at=(Math.floor(y)*sw+Math.floor(x))*4+3;if(pixels[at]>90)locations.push(x,y,pixels[at]/255);}
+  const available=locations.length/3,n=Math.min(720,available),rng=randomSource(seedOf(String(cue.id||element.textContent||'inscription'))),points=new Float32Array(n*8);
+  for(let i=0;i<n;i++){
+   const at=Math.min(available-1,Math.floor((i+rng())*available/n))*3,j=i*8;
+   points[j]=left+locations[at];points[j+1]=top+locations[at+1];points[j+2]=rng();points[j+3]=rng();points[j+4]=rng();points[j+5]=rng();points[j+6]=locations[at+2];points[j+7]=rng();
+  }
+  return {element,points,count:n,color:cue.color||style.color||'#4a443b',font:style.font,rect:{left,top,width:sw,height:sh},maskDensity:available/Math.max(1,n)};
+ }
+ function phaseOf(p,cue){
+  if(cue.enter&&p>=cue.enter[0]&&p<=cue.enter[1]&&cue.enter[1]>cue.enter[0])return {out:false,t:clamp((p-cue.enter[0])/(cue.enter[1]-cue.enter[0]))};
+  if(cue.exit&&p>=cue.exit[0]&&p<=cue.exit[1]&&cue.exit[1]>cue.exit[0])return {out:true,t:clamp((p-cue.exit[0])/(cue.exit[1]-cue.exit[0]))};
+  return null;
+ }
+ function render(p,cues=[],reduced=false){
+  if(dead||!ctx)return api;
+  if(reduced||!Number.isFinite(p)){clear();return api;}
+  const started=performance.now();if(dirty)viewport();
+  const active=[];
+  for(let i=0;i<cues.length;i++){
+   const cue=cues[i],phase=phaseOf(p,cue);if(!phase)continue;
+   const id=cue.id??i;let item=cache.get(id);
+   if(!item||item.element!==cue.element){item=sample(cue)||{element:cue.element,count:0,points:[]};cache.set(id,item);}
+   if(item&&item.count)active.push({id,cue,item,phase});
+  }
+  if(!active.length){clear();lastMs=performance.now()-started;return api;}
+  const key=p+'|'+active.map(({id,cue})=>`${id}:${cue.origin?.x??''}:${cue.origin?.y??''}:${cue.color||''}`).join('|');
+  if(key===lastKey){lastMs=performance.now()-started;return api;}
+  clear();lastKey=key;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.globalCompositeOperation='source-over';
+  for(const {cue,item,phase} of active){
+   const t=phase.t,envelope=phase.out?smooth(0,.16,t)*(1-smooth(.38,1,t)):smooth(0,.14,t)*(1-smooth(.80,1,t));
+   if(envelope<.002)continue;
+   const ox=Number.isFinite(cue.origin?.x)?cue.origin.x:width*.64,oy=Number.isFinite(cue.origin?.y)?cue.origin.y:height*.5;
+   const points=item.points,baseRadius=clamp(.56*Math.sqrt(item.maskDensity),.58,1.12),localSpread=clamp(width*.065,26,74);
+   ctx.fillStyle=cue.color||item.color;
+   // Three opacity buckets keep the drawing cost bounded without per-point alpha state.
+   for(let bucket=0;bucket<3;bucket++){
+    ctx.beginPath();ctx.globalAlpha=envelope*(.36+bucket*.18);
+    for(let i=0;i<item.count;i++){
+     const j=i*8,tx=points[j],ty=points[j+1],seed=points[j+2],s2=points[j+3],s3=points[j+4],s4=points[j+5];
+     if(Math.min(2,Math.floor(points[j+7]*3))!==bucket)continue;
+     const delay=seed*.10,u=clamp((t-delay)/(1-delay)),q=phase.out?1-ease(u):ease(u),stream=s2<.18;
+     const angle=s3*Math.PI*2,scatter=localSpread*(.45+s4*.7);
+     const sx=stream?ox+Math.cos(angle)*(14+s4*27):tx+Math.cos(angle)*scatter;
+     const sy=stream?oy+Math.sin(angle)*(10+s4*20):ty+Math.sin(angle)*scatter*.75;
+     const arc=(stream?clamp(Math.abs(tx-sx)*.26,28,124):14+s3*18)*(s4>.5?1:-1),one=1-q;
+     const x=sx*one+tx*q+Math.sin(Math.PI*q)*arc*.12;
+     const y=sy*one+ty*q-Math.sin(Math.PI*q)*arc;
+     const r=baseRadius*(.82+.36*seed)*(stream?.88:1);
+     ctx.moveTo(x+r,y);ctx.arc(x,y,r,0,Math.PI*2);
+    }
+    ctx.fill();
+   }
+   hasInk=true;
+  }
+  ctx.globalAlpha=1;draws++;lastMs=performance.now()-started;return api;
+ }
+ const api={render,invalidate,clear,getStatus(){return {width,height,dpr,draws,measures,cachedCues:cache.size,particles:Array.from(cache.values()).reduce((n,c)=>n+c.count,0),counts:Array.from(cache.entries()).map(([id,c])=>({id,count:c.count})),lastFrameMs:lastMs,hasInk,disposed:dead};},dispose(){clear();cache.clear();dead=true;}};
+ return api;
+}
+global.mountInscriptionDust=mountInscriptionDust;
+})(window);
+
+</script>
 </head>
 <body>
 <header id="header"><button class="logo-button" data-go="hero" aria-label="返回首页"><img class="logo" data-asset="lushan-mark" alt="庐山博物馆 Lushan Museum"></button><nav class="desktop-nav" aria-label="主要导航"><button data-go="hero" class="active" data-zh="首页" data-en="Home">首页</button><button data-open="map" data-zh="庐博概况" data-en="About">庐博概况</button><button data-go="permanent" data-zh="展览典藏" data-en="Exhibitions">展览典藏</button><button data-go="news" data-zh="资讯学术" data-en="News">资讯学术</button><button data-open="education" data-zh="教育文创" data-en="Learning">教育文创</button><button data-go="visit" data-zh="参观服务" data-en="Visit">参观服务</button></nav><div class="header-tools"><button class="language active" data-lang="zh" aria-label="中文">中</button><button class="language" data-lang="en" aria-label="English">EN</button><button data-open="search" aria-label="搜索"><svg class="search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="5.7"/><path d="m12.3 12.3 5 5"/></svg></button><a class="reserve" href="https://www.lushanmuseum.cn/service.asp?id=517" target="_blank" rel="noopener" data-zh="预约参观" data-en="Reservations">预约参观</a></div><button class="mobile-menu" data-open="menu" data-zh="菜单" data-en="Menu">菜单</button></header>
@@ -1002,6 +1181,9 @@ void main(){
  float white=clamp((uProgress-.33)/.39,0.,1.);white=white*(2.-white);
  vColor=mix(loose,mix(ink,clay,.64*white),pull);
  float vignette=1.-smoothstep(.69,1.09,length(gl_Position.xy));
+ vec2 gap=uShift.x>.14?(gl_Position.xy-vec2(-.66,-.12))*vec2(1.,.77):(gl_Position.xy-vec2(-.38,.72))*vec2(.44,1.);
+ float clearType=smoothstep(.26,.64,length(gap));
+ vignette*=mix(clearType,1.,smoothstep(.12,.27,uProgress));
  vAlpha=mix(.48+.25*radial,.29+.61*front,pull)*mix(vignette,1.,smoothstep(.82,1.,pull));
  vAlpha*=1.-smoothstep(.68,.72,uProgress);
  gl_PointSize=uDotSize*mix(.76,1.17,scatter)*mix(.86,1.,pull);
@@ -1115,7 +1297,9 @@ function mountArtifactStage(canvas,options={}){
   const qx=r[0]*x+r[3]*y+r[6]*z,qy=r[1]*x+r[4]*y+r[7]*z,scale=mesh.scale*(options.scale||1)*zoom;
   const shiftX=(-qx*scale+(low?0:.12))*focus*Math.min(width,height)/width;
   const shiftY=(-qy*scale+.08)*focus*Math.min(width,height)/height;
-  lastCamera={zoom,shiftX,shiftY,focus};return lastCamera;
+  const frame=inscriptionFraming(p,rectW,rectH);
+  lastCamera={zoom:zoom*frame.scale,shiftX:shiftX*frame.scale+frame.x,shiftY:shiftY*frame.scale+frame.y,focus};
+  return lastCamera;
  }
  function bindMesh(){gl.bindBuffer(gl.ARRAY_BUFFER,vm);for(const [l,size,type,norm,stride,offset] of meshAttributes){gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,size,type,norm,stride,offset);}gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,im);}
  function initializeGL(){
@@ -1200,7 +1384,13 @@ function mountArtifactStage(canvas,options={}){
    const sx=sw*.5+qx*f+view.shiftX*sw*.5,sy=sh*.5-qy*f-view.shiftY*sh*.5,ix=Math.round(sx),iy=Math.round(sy);
    if(ix<-extent||iy<-extent||ix>=sw+extent||iy>=sh+extent)continue;
    const radial=Math.hypot(sx/sw*2-1,sy/sh*2-1);
-   const edge=gather<1?1-smooth(.66,1.04,radial):1;
+   let edge=gather<1?1-smooth(.66,1.04,radial):1;
+   if(p<.27){
+    const nx=sx/sw*2-1,ny=1-sy/sh*2,wide=view.shiftX>.14;
+    const distance=wide?Math.hypot(nx+.66,(ny+.12)*.77):Math.hypot((nx+.38)*.44,ny-.72);
+    const room=smooth(.26,.64,distance);
+    edge*=room+(1-room)*smooth(.12,.27,p);
+   }
    if(edge<.005)continue;
    let nx=r[0]*normals[j]+r[3]*normals[j+1]+r[6]*normals[j+2];
    let ny=r[1]*normals[j]+r[4]*normals[j+1]+r[7]*normals[j+2];
@@ -1475,7 +1665,9 @@ function fallbackArtifactStage(canvas){
   function draw(){
     if(dead||!ctx||!active)return;
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    const side=Math.min(canvas.width,canvas.height),x=(canvas.width-side)/2,y=(canvas.height-side)/2;
+    const framing=inscriptionFraming(value,canvas.clientWidth,canvas.clientHeight);
+    const side=Math.min(canvas.width,canvas.height)*framing.scale;
+    const x=(canvas.width*(1+framing.x)-side)/2,y=(canvas.height*(1-framing.y)-side)/2;
     let i=0,t=0;
     if(value<.33)t=clamp(value/.33);
     else if(value<.72){i=1;t=clamp((value-.33)/.39);}
@@ -1558,6 +1750,7 @@ function setArtifactJourney(value) {
   const travel = clamp((artifactJourney - ARTIFACT_TRANSFER_START) / (ARTIFACT_EXIT - ARTIFACT_TRANSFER_START));
   if (artifactEngine?.setFrame) artifactEngine.setFrame(progress,active,travel);
   else artifactEngine?.setProgress(progress);
+  stageInscriptions.paint(progress);
   // Only the flight moves the canvas. Material frames stay on the GPU.
   if (previous > ARTIFACT_TRANSFER_START || artifactJourney >= ARTIFACT_TRANSFER_START) renderArtifactPlacement();
 }
@@ -1895,8 +2088,98 @@ document.addEventListener('keydown', e => {
   }
 });
 
+function mountStageInscriptions() {
+  const lines = [
+    {id:'cloud', enter:[-.18,-.018], exit:[.37,.50],
+     zh:['散点成器','细点渐次靠拢，勾出器口的轮廓。'],
+     en:['A vessel in points','Trace the rising and falling rim in the cloud of points.']},
+    {id:'rim', enter:[.44,.60], exit:[.724,.782],
+     zh:['口沿如瓣','器口向外舒展，轮廓向下渐渐收拢。'],
+     en:['A petalled rim','The lip flares outward. Below it, the body narrows towards the foot.']},
+    {id:'glaze', enter:[.742,.803], exit:[.963,.999],
+     zh:['青釉细纹','深浅相间的细纹，在釉面上交错成网。'],
+     en:['Lines in the glaze','Fine lines branch across the pale green surface.']}
+  ];
+  const root=document.createElement('div');
+  root.className='artifact-inscription';root.hidden=true;root.setAttribute('role','region');
+  const canvas=document.createElement('canvas');
+  canvas.className='inscription-dust';canvas.setAttribute('aria-hidden','true');
+  const cues=lines.map(line=>{
+    const block=document.createElement('div'),title=document.createElement('h2'),body=document.createElement('p');
+    block.className='inscription-cue';block.dataset.cue=line.id;block.setAttribute('aria-hidden','true');
+    block.append(title,body);root.append(block);
+    return {...line,element:title,body,block,origin:{x:0,y:0}};
+  });
+  root.append(canvas);document.body.append(root);
+  const dust=window.mountInscriptionDust?.(canvas);
+  const motionPref=matchMedia('(prefers-reduced-motion: reduce)');
+  let active=false, lang='', introFrame=0, started=null, lastP=0, shown=null, needsLayout=true;
+  const smooth = (a,b,x) => {const t=clamp((x-a)/(b-a));return t*t*(3-2*t);};
+  function setLanguage() {
+    lang=language;
+    root.setAttribute('aria-label',lang==='en'?'About the digital object':'数字文物解读');
+    for(const cue of cues){[cue.element.textContent,cue.body.textContent]=cue[lang==='en'?'en':'zh'];}
+    needsLayout=true;
+  }
+  function measure() {
+    const w=root.clientWidth,h=root.clientHeight,wide=w>=540 && w/h>=1.2;
+    const origins=wide?[[.53,.52],[.55,.40],[.48,.44]]:[[.48,.44],[.54,.57],[.55,.49]];
+    cues.forEach((cue,i)=>{cue.origin.x=origins[i][0]*w;cue.origin.y=origins[i][1]*h;});
+    dust?.invalidate();needsLayout=false;
+  }
+  function paint(realP) {
+    if (lang!==language) setLanguage();
+    if (!active || document.hidden) return;
+    const offset=started===null ? 0 : -.18*(1-smooth(0,630,performance.now()-started));
+    const p=realP+offset;
+    lastP=p;
+    if(realP>=.99999) {
+      root.hidden=true;shown=null;dust?.clear();return;
+    }
+    if(root.hidden){root.hidden=false;needsLayout=true;}
+    if(needsLayout)measure();
+    let best=.02;shown=null;
+    for(const cue of cues) {
+      const [a,b]=cue.enter,[c,d]=cue.exit;
+      const ink=smooth(a+(b-a)*.54,b,p)*(1-smooth(c,c+(d-c)*.57,p));
+      const copy=smooth(a+(b-a)*.62,b,p)*(1-smooth(c,c+(d-c)*.55,p));
+      cue.element.style.opacity=String(ink);
+      cue.body.style.opacity=String(copy);
+      if(ink>best){best=ink;shown=cue.id;}
+    }
+    for(const cue of cues)cue.block.setAttribute('aria-hidden',String(cue.id!==shown));
+    dust?.render(p,cues,motionPref.matches);
+  }
+  function finishEntry(){if(introFrame)cancelAnimationFrame(introFrame);introFrame=0;started=null;}
+  function activate() {
+    finishEntry();active=scene===artifactSceneIndex();shown=null;
+    if (!active){root.hidden=true;dust?.clear();return;}
+    if(artifactJourney===0 && !motionPref.matches && !document.hidden){
+      started=performance.now();
+      function intro(now){
+        if(now-started>=630){introFrame=0;started=null;paint(progress);return;}
+        if(!motion)paint(progress);introFrame=requestAnimationFrame(intro);
+      }
+      introFrame=requestAnimationFrame(intro);
+    }
+    paint(progress);
+  }
+  function invalidate(){needsLayout=true;paint(progress);}
+  new MutationObserver(invalidate).observe(document.documentElement,{attributes:true,attributeFilter:['lang']});
+  window.addEventListener('museum:scenechange',activate);
+  window.addEventListener('resize',invalidate);
+  document.fonts?.ready.then(invalidate);
+  document.addEventListener('visibilitychange',()=>{finishEntry();if(!document.hidden)invalidate();});
+  motionPref.addEventListener?.('change',()=>{finishEntry();invalidate();});
+  return {
+    paint,invalidate,
+    status:()=>({active:active&&!root.hidden,cue:shown,progress:lastP,dust:dust?.getStatus()||null})
+  };
+}
+const stageInscriptions=mountStageInscriptions();
+
 initArtifact();updateChrome();const start=scenes.findIndex(s=>s.id===location.hash.slice(1));if(start>0)go(start);
-window.previewState=()=>({scene,progress,artifactJourney,artifactPhase:artifactNames[artifactStep],artifactAnimating:!!artifactAnimation,artifactHoldRemaining:0,artifactTarget:motion?artifactNames[motion.target]:null,artifactQueued:motion?.queued!=null?artifactNames[motion.queued]:null,artifactTransfer:clamp((artifactJourney-ARTIFACT_TRANSFER_START)/(ARTIFACT_EXIT-ARTIFACT_TRANSFER_START)),activeScene:scenes[scene].id,mapView,language,engine:artifactEngine?.getStatus?.()||null,dialog:$('dialog[open]')?.id||null});
+window.previewState=()=>({scene,progress,artifactJourney,inscription:stageInscriptions.status(),artifactPhase:artifactNames[artifactStep],artifactAnimating:!!artifactAnimation,artifactHoldRemaining:0,artifactTarget:motion?artifactNames[motion.target]:null,artifactQueued:motion?.queued!=null?artifactNames[motion.queued]:null,artifactTransfer:clamp((artifactJourney-ARTIFACT_TRANSFER_START)/(ARTIFACT_EXIT-ARTIFACT_TRANSFER_START)),activeScene:scenes[scene].id,mapView,language,engine:artifactEngine?.getStatus?.()||null,dialog:$('dialog[open]')?.id||null});
 
 </script>
 <script>
